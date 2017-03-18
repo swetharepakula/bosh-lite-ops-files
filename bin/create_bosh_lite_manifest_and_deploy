@@ -1,0 +1,9 @@
+bosh2 -e lite -d cf deploy -n ~/workspace/cf-deployment/cf-deployment.yml \
+-o ~/workspace/deployments/vbox/operations/tcp-routing-bosh-lite.yml \
+-o ~/workspace/deployments/vbox/operations/bosh-lite.yml \
+-o ~/workspace/cf-deployment/operations/use-postgres-tcp-routing.yml \
+--vars-store ~/workspace/deployments/vbox/deployment-vars.yml \
+-v system_domain=bosh-lite.com
+
+echo "Downloading current manifest to ~/worksapce/deployments/vbox/bosh-lite.yml"
+bosh2 -e lite -d cf manifest > ~/workspace/deployments/vbox/bosh-lite.yml
