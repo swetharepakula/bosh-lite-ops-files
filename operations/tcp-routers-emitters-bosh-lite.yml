@@ -1,0 +1,85 @@
+---
+- type: replace
+  path: /instance_groups/-
+  value:
+    name: tcp-router
+    azs:
+    - z1
+    instances: 1
+    vm_type: m3.medium
+    stemcell: default
+    vm_extensions:
+    - cf-tcp-router-network-properties
+    networks:
+    - name: private
+    jobs:
+    - name: consul_agent
+      release: consul
+      consumes:
+        consul: {from: consul_server}
+    - name: tcp_router
+      release: routing
+      properties:
+        tcp_router:
+          oauth_secret: "((uaa_clients_tcp_router_secret))"
+          health_check_port: 8080
+        uaa:
+          ca_cert: "((uaa_ca.certificate))"
+          tls_port: 8443
+    - name: metron_agent
+      release: loggregator
+      properties: &metron_agent_properties
+        syslog_daemon_config:
+          enable: false
+        metron_agent:
+          deployment: "((system_domain))"
+          etcd:
+            client_cert: "((etcd_client.certificate))"
+            client_key: "((etcd_client.private_key))"
+        metron_endpoint:
+          shared_secret: "((dropsonde_shared_secret))"
+        loggregator:
+          tls:
+            ca_cert: "((loggregator_tls_metron.ca))"
+            metron:
+              cert: "((loggregator_tls_metron.certificate))"
+              key: "((loggregator_tls_metron.private_key))"
+          etcd:
+            require_ssl: true
+            ca_cert: "((etcd_server.ca))"
+            machines:
+            - cf-etcd.service.cf.internal
+
+- type: replace
+  path: /instance_groups/-
+  value:
+    name: tcp-emitter
+    azs:
+    - z1
+    instances: 1
+    vm_type: m3.medium
+    stemcell: default
+    networks:
+    - name: private
+    jobs:
+    - name: consul_agent
+      release: consul
+      consumes:
+        consul: {from: consul_server}
+    - name: tcp_emitter
+      release: routing
+      properties:
+        tcp_emitter:
+          oauth_secret: "((uaa_clients_tcp_emitter_secret))"
+          bbs:
+            client_cert: "((diego_bbs_client.certificate))"
+            client_key: "((diego_bbs_client.private_key))"
+        bbs:
+          api_location: bbs.service.cf.internal:8889
+          ca_cert: "((diego_bbs_client.ca))"
+        uaa:
+          ca_cert: "((uaa_ca.certificate))"
+          tls_port: 8443
+    - name: metron_agent
+      release: loggregator
+      properties: *metron_agent_properties

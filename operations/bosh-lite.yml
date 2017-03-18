@@ -1,0 +1,250 @@
+---
+# --- Set Router Static IP ---
+- type: replace
+  path: /instance_groups/name=router/networks
+  value:
+  - name: private
+    static_ips: [10.244.0.34]
+
+# --- Remove unnecessary static ips for nats_machines ---
+- type: remove
+  path: /instance_groups/name=nats/networks/name=private/static_ips
+
+# --- Replace MySQL job with Postgres ---
+- type: replace
+  path: /releases/-
+  value:
+    name: postgres
+    url: https://bosh.io/d/github.com/cloudfoundry/postgres-release?v=13
+    sha1: db1b34e15edef77fac68d1b55fac6cd22841d2ff
+    version: "13"
+
+- type: remove
+  path: /instance_groups/name=mysql/jobs/name=mysql
+- type: remove
+  path: /instance_groups/name=mysql/jobs/name=proxy
+- type: replace
+  path: /instance_groups/name=mysql/jobs/-
+  value:
+    name: postgres
+    release: postgres
+    properties:
+      databases:
+        address: sql-db.service.internal
+        databases:
+        - citext: true
+          name: cloud_controller
+          tag: cc
+        - citext: true
+          name: uaa
+          tag: uaa
+        - citext: true
+          name: diego
+          tag: diego
+        - citext: true
+          name: routing-api
+          tag: routing-api
+        db_scheme: postgres
+        port: 5524
+        roles:
+        - name: cloud_controller
+          password: ((cc_database_password))
+          tag: admin
+        - name: uaa
+          password: ((uaa_database_password))
+          tag: admin
+        - name: diego
+          password: ((diego_database_password))
+          tag: admin
+        - name: routing_api
+          password: ((routing_api_database_password))
+          tag: admin
+- type: replace
+  path: /instance_groups/name=mysql/name
+  value: postgres
+- type: replace
+  path: /instance_groups/name=postgres/jobs/name=consul_agent/properties?/consul/agent/services?
+  value:
+    sql_db:
+      check: {}
+
+# --- Replace usages of MySQL DB with Postgres ---
+- type: replace
+  path: /instance_groups/name=api/jobs/name=cloud_controller_ng/properties/ccdb
+  value: &ccdb
+    db_scheme: postgres
+    address: sql-db.service.cf.internal
+    roles:
+    - tag: admin
+      name: cloud_controller
+      password: ((cc_database_password))
+    databases:
+    - tag: cc
+      name: cloud_controller
+    port: 5524
+- type: replace
+  path: /instance_groups/name=api/jobs/name=cloud_controller_worker/properties/ccdb
+  value: *ccdb
+- type: replace
+  path: /instance_groups/name=cc-clock/jobs/name=cloud_controller_clock/properties/ccdb
+  value: *ccdb
+- type: replace
+  path: /instance_groups/name=uaa/jobs/name=uaa/properties/uaadb
+  value:
+    db_scheme: postgresql
+    address: sql-db.service.cf.internal
+    roles:
+    - tag: admin
+      name: uaa
+      password: ((uaa_database_password))
+    databases:
+    - tag: uaa
+      name: uaa
+    port: 5524
+- type: replace
+  path: /instance_groups/name=diego-bbs/jobs/name=bbs/properties/diego/bbs/sql
+  value:
+    db_host: sql-db.service.cf.internal
+    db_port: 5524
+    db_schema: diego
+    db_username: diego
+    db_password: "((diego_database_password))"
+    db_driver: postgres
+
+# --- Remove now unused cf-mysql release and variables ---
+- type: remove
+  path: /releases/name=cf-mysql?
+- type: remove
+  path: /variables/name=cf_mysql_mysql_admin_password?
+- type: remove
+  path: /variables/name=cf_mysql_mysql_cluster_health_password?
+- type: remove
+  path: /variables/name=cf_mysql_mysql_galera_healthcheck_endpoint_password?
+- type: remove
+  path: /variables/name=cf_mysql_mysql_galera_healthcheck_password?
+- type: remove
+  path: /variables/name=cf_mysql_mysql_roadmin_password?
+- type: remove
+  path: /variables/name=cf_mysql_proxy_api_password?
+
+# --- Add Bosh Lite Security Groups ---
+- type: replace
+  path: /instance_groups/name=api/jobs/name=cloud_controller_ng/properties/cc/default_running_security_groups
+  value:
+  - public_networks
+  - dns
+  - load_balancer
+- type: replace
+  path: /instance_groups/name=api/jobs/name=cloud_controller_worker/properties/cc/default_running_security_groups
+  value:
+  - public_networks
+  - dns
+  - load_balancer
+- type: replace
+  path: /instance_groups/name=cc-clock/jobs/name=cloud_controller_clock/properties/cc/default_running_security_groups
+  value:
+  - public_networks
+  - dns
+  - load_balancer
+- type: replace
+  path: /instance_groups/name=api/jobs/name=cloud_controller_ng/properties/cc/security_group_definitions/-
+  value:
+    name: load_balancer
+    rules:
+    - destination: 10.244.0.34
+      protocol: all
+- type: replace
+  path: /instance_groups/name=api/jobs/name=cloud_controller_worker/properties/cc/security_group_definitions/-
+  value:
+    name: load_balancer
+    rules:
+    - destination: 10.244.0.34
+      protocol: all
+- type: replace
+  path: /instance_groups/name=cc-clock/jobs/name=cloud_controller_clock/properties/cc/security_group_definitions/-
+  value:
+    name: load_balancer
+    rules:
+    - destination: 10.244.0.34
+      protocol: all
+
+# ----- Move SSH Proxy from diego-brain to router ----
+- type: remove
+  path: /instance_groups/name=diego-brain/vm_extensions
+- type: remove
+  path: /instance_groups/name=diego-brain/jobs/name=ssh_proxy
+- type: replace
+  path: /instance_groups/name=router/vm_extensions
+  value:
+  - ssh-proxy-and-router-lb
+- type: replace
+  path: /instance_groups/name=router/jobs/-
+  value:
+    name: ssh_proxy
+    release: diego
+    properties:
+      diego:
+        ssl:
+          skip_cert_verify: true
+        ssh_proxy:
+          enable_cf_auth: true
+          host_key: "((diego_ssh_proxy_host_key.private_key))"
+          uaa_secret: "((uaa_clients_ssh-proxy_secret))"
+          uaa_token_url: "https://uaa.((system_domain))/oauth/token"
+          bbs: &5
+            ca_cert: "((diego_bbs_client.ca))"
+            client_cert: "((diego_bbs_client.certificate))"
+            client_key: "((diego_bbs_client.private_key))"
+
+# ----- Scale Down ------
+- type: replace
+  path: /instance_groups/name=consul/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=nats/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=etcd/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=etcd/jobs/name=etcd/properties/etcd/cluster
+  value:
+  - instances: 1
+    name: etcd
+- type: replace
+  path: /instance_groups/name=diego-bbs/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=uaa/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=diego-brain/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=diego-cell/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=diego-cell/jobs/name=rep/properties/diego/rep/evacuation_timeout_in_seconds?
+  value: 0
+- type: replace
+  path: /instance_groups/name=router/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=route-emitter/azs
+  value:
+  - z1
+- type: replace
+  path: /instance_groups/name=route-emitter/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=api/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=cc-bridge/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=doppler/instances
+  value: 1
+- type: replace
+  path: /instance_groups/name=log-api/instances
+  value: 1
